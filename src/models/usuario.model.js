@@ -19,8 +19,12 @@ const usuarioSchema = new mongoose.Schema({
   },
   rol: {
     type: String,
-    enum: ['estudiante', 'profesor', 'administrativo', 'externo'],
+    enum: [ 'estudiante', 'profesor', 'administrativo', 'externo'],
     default: 'estudiante'
+  },
+  activo: {
+    type: Boolean,
+    default: true  //  usuarios activos por defecto
   },
   
   tokenRecuperacion: {
@@ -29,10 +33,8 @@ const usuarioSchema = new mongoose.Schema({
   tokenRecuperacionExpira: {
     type: Date
   }
-
-  
 }, {
-  timestamps: true // Agrega createdAt y updatedAt automáticamente
+  timestamps: true
 });
 
 export default mongoose.model('Usuario', usuarioSchema);

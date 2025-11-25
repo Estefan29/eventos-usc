@@ -97,8 +97,7 @@ export const validarEvento = [
 // Validaciones para inscripciones
 export const validarInscripcion = [
   body('id_usuario')
-    .trim()
-    .notEmpty().withMessage('El ID de usuario es obligatorio'),
+  .optional(),
   
   body('id_evento_mongo')
     .trim()

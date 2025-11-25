@@ -6,15 +6,17 @@ import { AppError } from "../middleware/errorHandler.js";
 export const crearInscripcion = async (req, res, next) => {
   try {
     const db = await conectarMySQL();
-    const { id_usuario, id_evento_mongo } = req.body;
+    const id_usuario_mongo = req.usuario._id.toString();
+    const { id_evento_mongo } = req.body;
+
     
     // El middleware validarInscripcion ya verificó todo
     const evento = req.evento;
     
     // Crear la inscripción
     const [result] = await db.query(
-      "INSERT INTO inscripciones (id_usuario, id_evento_mongo, fecha_inscripcion, estado) VALUES (?, ?, NOW(), ?)",
-      [id_usuario, id_evento_mongo, evento.precio > 0 ? 'pendiente' : 'confirmada']
+      "INSERT INTO inscripciones (id_usuario_mongo, id_evento_mongo, fecha_inscripcion, estado) VALUES (?, ?, NOW(), ?)",
+      [id_usuario_mongo, id_evento_mongo, evento.precio > 0 ? 'pendiente' : 'confirmada']
     );
 
     // Si el evento es gratuito, confirmar automáticamente
@@ -27,7 +29,7 @@ export const crearInscripcion = async (req, res, next) => {
         : '✅ Inscripción confirmada exitosamente',
       inscripcion: {
         id: result.insertId,
-        id_usuario,
+        id_usuario_mongo,
         id_evento_mongo,
         evento: {
           titulo: evento.titulo,
@@ -50,7 +52,7 @@ export const obtenerInscripciones = async (req, res, next) => {
     const db = await conectarMySQL();
     const { 
       estado, 
-      id_usuario, 
+      id_usuario_mongo, 
       id_evento_mongo,
       pagina = 1,
       limite = 20
@@ -64,9 +66,9 @@ export const obtenerInscripciones = async (req, res, next) => {
       params.push(estado);
     }
 
-    if (id_usuario) {
-      query += " AND id_usuario = ?";
-      params.push(id_usuario);
+    if (id_usuario_mongo) {
+      query += " AND id_usuario_mongo = ?";
+      params.push(id_usuario_mongo);
     }
 
     if (id_evento_mongo) {
@@ -86,7 +88,7 @@ export const obtenerInscripciones = async (req, res, next) => {
     const countParams = params.slice(0, -2); // Remover LIMIT y OFFSET
     
     if (estado) countQuery += " AND estado = ?";
-    if (id_usuario) countQuery += " AND id_usuario = ?";
+    if (id_usuario_mongo) countQuery += " AND id_usuario_mongo = ?";
     if (id_evento_mongo) countQuery += " AND id_evento_mongo = ?";
 
     const [totalResult] = await db.query(countQuery, countParams);
@@ -268,15 +270,15 @@ export const eliminarInscripcion = async (req, res, next) => {
 export const obtenerMisInscripciones = async (req, res, next) => {
   try {
     const db = await conectarMySQL();
-    const id_usuario = req.usuario._id.toString();
+    const id_usuario_mongo = req.usuario._id.toString();
 
     const [inscripciones] = await db.query(
       `SELECT i.*, 
         (SELECT COUNT(*) FROM pagos p WHERE p.id_inscripcion = i.id) as tiene_pagos
       FROM inscripciones i
-      WHERE i.id_usuario = ?
+      WHERE i.id_usuario_mongo = ?
       ORDER BY i.fecha_inscripcion DESC`,
-      [id_usuario]
+      [id_usuario_mongo]
     );
 
     // Enriquecer con información de eventos
