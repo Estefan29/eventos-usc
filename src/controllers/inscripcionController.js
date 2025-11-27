@@ -267,10 +267,13 @@ export const eliminarInscripcion = async (req, res, next) => {
 };
 
 // Obtener mis inscripciones (usuario autenticado)
+
 export const obtenerMisInscripciones = async (req, res, next) => {
   try {
     const db = await conectarMySQL();
     const id_usuario_mongo = req.usuario._id.toString();
+
+    console.log('🔍 Buscando inscripciones para usuario:', id_usuario_mongo);
 
     const [inscripciones] = await db.query(
       `SELECT i.*, 
@@ -281,22 +284,32 @@ export const obtenerMisInscripciones = async (req, res, next) => {
       [id_usuario_mongo]
     );
 
+    console.log('📝 Inscripciones encontradas:', inscripciones.length);
+
     // Enriquecer con información de eventos
     const inscripcionesConEventos = await Promise.all(
       inscripciones.map(async (inscripcion) => {
-        const evento = await Evento.findById(inscripcion.id_evento_mongo);
-        return {
-          ...inscripcion,
-          evento
-        };
+        try {
+          const evento = await Evento.findById(inscripcion.id_evento_mongo);
+          return {
+            ...inscripcion,
+            evento: evento || null
+          };
+        } catch (error) {
+          console.error('Error al cargar evento:', inscripcion.id_evento_mongo, error);
+          return {
+            ...inscripcion,
+            evento: null
+          };
+        }
       })
     );
 
-    res.json({
-      status: 'success',
-      data: inscripcionesConEventos
-    });
+    // ✅ IMPORTANTE: Devolver como array directamente
+    res.json(inscripcionesConEventos);
+    
   } catch (error) {
+    console.error('❌ Error en obtenerMisInscripciones:', error);
     next(error);
   }
 };

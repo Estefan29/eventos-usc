@@ -5,78 +5,36 @@ import { AppError } from '../middleware/errorHandler.js';
 import crypto from 'node:crypto';
 import nodemailer from 'nodemailer';
 
-// 🔒 CONFIGURACIÓN DE SEGURIDAD
-const ROLES_PUBLICOS = ['estudiante', 'profesor', 'externo'];
-const ROLES_PROTEGIDOS = ['admin', 'administrativo'];
 const JWT_SECRET = process.env.JWT_SECRET || 'clave_secreta_usc_2024';
 
-// ============================================
-// UTILIDADES
-// ============================================
 const generarToken = (id) => {
   return jwt.sign({ id }, JWT_SECRET, { expiresIn: '7d' });
 };
 
-// ============================================
-// REGISTRO DE USUARIO (CON SEGURIDAD MEJORADA)
-// ============================================
 export const registrarUsuario = async (req, res, next) => {
   try {
-    const { nombre, correo, contraseña, rol, telefono, carrera } = req.body;
+    const { nombre, correo, password, rol } = req.body;
 
-    // ✅ VALIDACIÓN 1: Campos obligatorios
-    if (!nombre || !correo || !contraseña) {
+    if (!nombre || !correo || !password) {
       throw new AppError('Todos los campos son obligatorios', 400);
     }
 
-    // ✅ VALIDACIÓN 2: Verificar que no exista el correo
     const usuarioExiste = await Usuario.findOne({ correo });
     if (usuarioExiste) {
       throw new AppError('El correo ya está registrado', 400);
     }
 
-    // 🔒 VALIDACIÓN 3: BLOQUEAR ROLES PROTEGIDOS (CRÍTICO)
-    const rolSolicitado = rol || 'estudiante';
-    
-    if (ROLES_PROTEGIDOS.includes(rolSolicitado)) {
-      console.warn(`⚠️  Intento de registro con rol protegido: ${rolSolicitado} - Correo: ${correo}`);
-      throw new AppError(
-        'No tienes permisos para registrarte con ese rol. Los roles de Administrador y Administrativo son asignados por el sistema.',
-        403
-      );
-    }
-
-    // ✅ VALIDACIÓN 4: Verificar que el rol sea válido
-    if (!ROLES_PUBLICOS.includes(rolSolicitado)) {
-      throw new AppError(
-        `Rol no válido. Los roles permitidos son: ${ROLES_PUBLICOS.join(', ')}`,
-        400
-      );
-    }
-
-    // ✅ VALIDACIÓN 5: Longitud de contraseña
-    if (contraseña.length < 6) {
-      throw new AppError('La contraseña debe tener al menos 6 caracteres', 400);
-    }
-
-    // Hashear contraseña
     const salt = await bcrypt.genSalt(10);
-    const contraseñaHash = await bcrypt.hash(contraseña, salt);
+    const passwordHash = await bcrypt.hash(password, salt);
 
-    // Crear nuevo usuario
     const nuevoUsuario = new Usuario({
       nombre,
       correo,
-      contraseña: contraseñaHash,
-      rol: rolSolicitado, // Solo puede ser: estudiante, profesor o externo
-      telefono,
-      carrera
+      password: passwordHash,
+      rol: rol || 'estudiante',
     });
 
     await nuevoUsuario.save();
-
-    // Log de seguridad
-    console.log(`✅ Nuevo registro exitoso: ${correo} - Rol: ${rolSolicitado}`);
 
     const token = generarToken(nuevoUsuario._id);
 
@@ -88,9 +46,7 @@ export const registrarUsuario = async (req, res, next) => {
         id: nuevoUsuario._id,
         nombre: nuevoUsuario.nombre,
         correo: nuevoUsuario.correo,
-        rol: nuevoUsuario.rol,
-        telefono: nuevoUsuario.telefono,
-        carrera: nuevoUsuario.carrera
+        rol: nuevoUsuario.rol
       }
     });
   } catch (error) {
@@ -98,31 +54,37 @@ export const registrarUsuario = async (req, res, next) => {
   }
 };
 
-// ============================================
-// LOGIN DE USUARIO
-// ============================================
 export const loginUsuario = async (req, res, next) => {
   try {
-    const { correo, contraseña } = req.body;
+    const { correo, password } = req.body;
 
-    if (!correo || !contraseña) {
+    console.log('📧 Login attempt:', { correo, password: password ? '***' : undefined });
+
+    if (!correo || !password) {
       throw new AppError('Correo y contraseña son obligatorios', 400);
     }
 
-    const usuario = await Usuario.findOne({ correo });
+    // 👇 ESTE ES EL CAMBIO IMPORTANTE
+    const usuario = await Usuario.findOne({ correo }).select('+password');
+
+    console.log("📝 Usuario encontrado:", usuario);
+
     if (!usuario) {
       throw new AppError('Credenciales inválidas', 401);
     }
 
-    const contraseñaValida = await bcrypt.compare(contraseña, usuario.contraseña);
-    if (!contraseñaValida) {
+    console.log('🔐 Comparando passwords...');
+    console.log('Hash guardado en BD:', usuario.password);
+
+    const passwordValida = await bcrypt.compare(password, usuario.password);
+
+    console.log('¿Password válida?:', passwordValida);
+
+    if (!passwordValida) {
       throw new AppError('Credenciales inválidas', 401);
     }
 
     const token = generarToken(usuario._id);
-
-    // Log de seguridad
-    console.log(`✅ Login exitoso: ${correo} - Rol: ${usuario.rol}`);
 
     res.json({
       status: 'success',
@@ -132,19 +94,15 @@ export const loginUsuario = async (req, res, next) => {
         id: usuario._id,
         nombre: usuario.nombre,
         correo: usuario.correo,
-        rol: usuario.rol,
-        telefono: usuario.telefono,
-        carrera: usuario.carrera
+        rol: usuario.rol
       }
     });
+
   } catch (error) {
+    console.error('❌ Error en login:', error);
     next(error);
   }
 };
-
-// ============================================
-// OBTENER PERFIL
-// ============================================
 export const obtenerPerfil = async (req, res) => {
   res.json({
     status: 'success',
@@ -159,9 +117,6 @@ export const obtenerPerfil = async (req, res) => {
   });
 };
 
-// ============================================
-// ACTUALIZAR PERFIL
-// ============================================
 export const actualizarPerfil = async (req, res, next) => {
   try {
     const { nombre, telefono, carrera } = req.body;
@@ -170,7 +125,7 @@ export const actualizarPerfil = async (req, res, next) => {
       req.usuario._id,
       { nombre, telefono, carrera },
       { new: true, runValidators: true }
-    ).select('-contraseña');
+    ).select('-password');
 
     res.json({
       status: 'success',
@@ -182,80 +137,88 @@ export const actualizarPerfil = async (req, res, next) => {
   }
 };
 
-// ============================================
-// CAMBIAR CONTRASEÑA
-// ============================================
-export const cambiarContraseña = async (req, res, next) => {
+export async function cambiarPassword(req, res) {
   try {
-    const { contraseñaActual, nuevaContraseña } = req.body;
+    const { passwordActual, passwordNuevo } = req.body;
+    const usuarioId = req.usuario.id;
 
-    if (!contraseñaActual || !nuevaContraseña) {
-      throw new AppError('Todas las contraseñas son requeridas', 400);
+    // Validaciones
+    if (!passwordActual || !passwordNuevo) {
+      return res.status(400).json({
+        mensaje: 'Debes proporcionar la contraseña actual y la nueva'
+      });
     }
 
-    if (nuevaContraseña.length < 6) {
-      throw new AppError('La nueva contraseña debe tener al menos 6 caracteres', 400);
+    if (passwordNuevo.length < 6) {
+      return res.status(400).json({
+        mensaje: 'La nueva contraseña debe tener al menos 6 caracteres'
+      });
     }
 
-    const usuario = await Usuario.findById(req.usuario._id);
-    
-    const contraseñaValida = await bcrypt.compare(contraseñaActual, usuario.contraseña);
-    if (!contraseñaValida) {
-      throw new AppError('Contraseña actual incorrecta', 401);
+    // Buscar usuario con password incluido
+    const usuario = await Usuario.findById(usuarioId).select('+password');
+
+    if (!usuario) {
+      return res.status(404).json({ mensaje: 'Usuario no encontrado' });
     }
 
-    const salt = await bcrypt.genSalt(10);
-    usuario.contraseña = await bcrypt.hash(nuevaContraseña, salt);
+    // Verificar contraseña actual
+    const passwordValido = await bcryptjs.compare(passwordActual, usuario.password);
+
+    if (!passwordValido) {
+      return res.status(401).json({
+        mensaje: 'La contraseña actual es incorrecta'
+      });
+    }
+
+    // Verificar que la nueva contraseña sea diferente
+    const esMismaPassword = await bcryptjs.compare(passwordNuevo, usuario.password);
+    if (esMismaPassword) {
+      return res.status(400).json({
+        mensaje: 'La nueva contraseña debe ser diferente a la actual'
+      });
+    }
+
+    // Encriptar nueva contraseña
+    const salt = await bcryptjs.genSalt(10);
+    usuario.password = await bcryptjs.hash(passwordNuevo, salt);
+
     await usuario.save();
 
-    console.log(`✅ Contraseña cambiada para: ${usuario.correo}`);
-
-    res.json({ 
-      status: 'success',
-      mensaje: '✅ Contraseña actualizada correctamente' 
+    res.json({
+      mensaje: '¡Contraseña actualizada exitosamente!'
     });
-  } catch (error) {
-    next(error);
-  }
-};
 
-// ============================================
-// RECUPERAR CONTRASEÑA (ENVIAR EMAIL)
-// ============================================
+  } catch (error) {
+    console.error('Error al cambiar contraseña:', error);
+    res.status(500).json({
+      mensaje: 'Error al cambiar la contraseña',
+      error: error.message
+    });
+  }
+}
 export const recuperarPassword = async (req, res) => {
   try {
     const { correo } = req.body;
 
-    if (!correo) {
-      return res.status(400).json({
-        mensaje: 'El correo es requerido'
-      });
-    }
-
-    // Buscar usuario por correo
     const usuario = await Usuario.findOne({ correo });
     
     if (!usuario) {
-      // Por seguridad, no revelar si el correo existe o no
       return res.status(200).json({
         mensaje: 'Si el correo existe, recibirás un enlace de recuperación'
       });
     }
 
-    // Generar token de recuperación (válido por 1 hora)
     const tokenRecuperacion = crypto.randomBytes(32).toString('hex');
-    const expiracion = Date.now() + 3600000; // 1 hora
+    const expiracion = Date.now() + 3600000;
 
-    // Guardar token en el usuario
     usuario.tokenRecuperacion = tokenRecuperacion;
     usuario.tokenRecuperacionExpira = expiracion;
     await usuario.save();
 
-    // Configurar URL del frontend
     const urlFrontend = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const enlaceRestablecimiento = `${urlFrontend}/restablecer-password?token=${tokenRecuperacion}`;
+    const enlaceRecuperacion = `${urlFrontend}/restablecer-password/${tokenRecuperacion}`;
 
-    // Configurar transporter de nodemailer
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
@@ -264,68 +227,62 @@ export const recuperarPassword = async (req, res) => {
       }
     });
 
-    // Enviar correo
     await transporter.sendMail({
       from: `"Eventos USC" <${process.env.EMAIL_USER}>`,
       to: correo,
-      subject: '🔑 Recuperación de Contraseña - Eventos USC',
+      subject: '🔒 Recuperación de Contraseña - Eventos USC',
       html: `
         <!DOCTYPE html>
         <html>
         <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Recuperar Contraseña</title>
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); 
+                     color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+            .content { background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }
+            .button { display: inline-block; background: #2563eb; color: white; 
+                     padding: 15px 30px; text-decoration: none; border-radius: 8px; 
+                     font-weight: bold; margin: 20px 0; }
+            .footer { text-align: center; margin-top: 20px; color: #6b7280; font-size: 12px; }
+          </style>
         </head>
-        <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f3f4f6;">
-          <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-            <!-- Header -->
-            <div style="background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); padding: 40px 20px; text-align: center; border-radius: 12px 12px 0 0;">
-              <h1 style="color: white; margin: 0; font-size: 28px;">🔐 Eventos USC</h1>
-              <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">Recuperación de Contraseña</p>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1 style="margin: 0;">🔐 Recuperación de Contraseña</h1>
             </div>
-            
-            <!-- Body -->
-            <div style="background: white; padding: 40px 30px; border-radius: 0 0 12px 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-              <p style="color: #374151; font-size: 16px; line-height: 1.6; margin-bottom: 20px;">
-                Hola <strong>${usuario.nombre}</strong>,
-              </p>
+            <div class="content">
+              <p>Hola <strong>${usuario.nombre}</strong>,</p>
+              <p>Recibimos una solicitud para restablecer tu contraseña en <strong>Eventos USC</strong>.</p>
+              <p>Haz clic en el siguiente botón para crear una nueva contraseña:</p>
               
-              <p style="color: #374151; font-size: 16px; line-height: 1.6; margin-bottom: 20px;">
-                Recibimos una solicitud para restablecer tu contraseña. Haz clic en el botón de abajo para crear una nueva contraseña:
-              </p>
-              
-              <!-- Botón principal -->
-              <div style="text-align: center; margin: 30px 0;">
-                <a href="${enlaceRestablecimiento}" 
-                   style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); color: white; text-decoration: none; padding: 16px 40px; border-radius: 8px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3);">
+              <div style="text-align: center;">
+                <a href="${enlaceRecuperacion}" class="button">
                   Restablecer Contraseña
                 </a>
               </div>
               
-              <!-- Enlace alternativo -->
-              <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
-                <p style="color: #6b7280; font-size: 14px; line-height: 1.6; margin-bottom: 10px;">
-                  Si el botón no funciona, copia y pega este enlace en tu navegador:
-                </p>
-                <p style="color: #3b82f6; font-size: 14px; word-break: break-all;">
-                  ${enlaceRestablecimiento}
-                </p>
-              </div>
+              <p style="color: #6b7280; font-size: 14px; margin-top: 20px;">
+                ⏰ Este enlace expirará en <strong>1 hora</strong>.
+              </p>
               
-              <!-- Advertencia -->
-              <div style="margin-top: 30px; padding: 15px; background-color: #fef3c7; border-left: 4px solid #fbbf24; border-radius: 4px;">
-                <p style="color: #92400e; font-size: 14px; margin: 0; line-height: 1.6;">
-                  ⚠️ Este enlace expirará en <strong>1 hora</strong>. Si no solicitaste este cambio, ignora este correo.
-                </p>
-              </div>
+              <p style="color: #6b7280; font-size: 14px;">
+                Si no solicitaste este cambio, puedes ignorar este correo de forma segura.
+              </p>
               
-              <!-- Footer -->
               <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
-                <p style="color: #9ca3af; font-size: 12px; text-align: center; margin: 0;">
-                  © ${new Date().getFullYear()} Eventos USC - Universidad Santiago de Cali
+                <p style="font-size: 12px; color: #6b7280;">
+                  O copia y pega este enlace en tu navegador:<br>
+                  <a href="${enlaceRecuperacion}" style="color: #2563eb; word-break: break-all;">
+                    ${enlaceRecuperacion}
+                  </a>
                 </p>
               </div>
+            </div>
+            <div class="footer">
+              <p>Este correo fue enviado por Eventos USC</p>
+              <p>© ${new Date().getFullYear()} Universidad Santiago de Cali</p>
             </div>
           </div>
         </body>
@@ -333,10 +290,10 @@ export const recuperarPassword = async (req, res) => {
       `
     });
 
-    console.log(`✅ Correo de recuperación enviado a: ${correo}`);
+    console.log('✅ Correo de recuperación enviado a:', correo);
 
     res.status(200).json({
-      mensaje: 'Correo de recuperación enviado exitosamente. Revisa tu bandeja de entrada.',
+      mensaje: 'Correo de recuperación enviado exitosamente',
       success: true
     });
 
@@ -349,31 +306,19 @@ export const recuperarPassword = async (req, res) => {
   }
 };
 
-// ============================================
-// RESTABLECER CONTRASEÑA (CON TOKEN)
-// ============================================
 export const restablecerPassword = async (req, res) => {
   try {
-    const { token, nuevaContraseña } = req.body;
+    const { token, nuevoPassword } = req.body;
 
-    // Validar que vengan los datos
-    if (!token || !nuevaContraseña) {
+    if (!token || !nuevoPassword) {
       return res.status(400).json({
         mensaje: 'Token y nueva contraseña son requeridos'
       });
     }
 
-    // Validar longitud de contraseña
-    if (nuevaContraseña.length < 6) {
-      return res.status(400).json({
-        mensaje: 'La contraseña debe tener al menos 6 caracteres'
-      });
-    }
-
-    // Buscar usuario con el token válido
     const usuario = await Usuario.findOne({
       tokenRecuperacion: token,
-      tokenRecuperacionExpira: { $gt: Date.now() } // Token no expirado
+      tokenRecuperacionExpira: { $gt: Date.now() }
     });
 
     if (!usuario) {
@@ -382,17 +327,21 @@ export const restablecerPassword = async (req, res) => {
       });
     }
 
-    // Hashear nueva contraseña
-    const salt = await bcrypt.genSalt(10);
-    usuario.contraseña = await bcrypt.hash(nuevaContraseña, salt);
+    if (nuevoPassword.length < 6) {
+      return res.status(400).json({
+        mensaje: 'La contraseña debe tener al menos 6 caracteres'
+      });
+    }
 
-    // Limpiar token de recuperación
+    const salt = await bcrypt.genSalt(10);
+    usuario.password = await bcrypt.hash(nuevoPassword, salt);
+
     usuario.tokenRecuperacion = undefined;
     usuario.tokenRecuperacionExpira = undefined;
 
     await usuario.save();
 
-    console.log(`✅ Contraseña restablecida exitosamente para: ${usuario.correo}`);
+    console.log('✅ Contraseña restablecida para:', usuario.correo);
 
     res.status(200).json({
       mensaje: 'Contraseña actualizada exitosamente',
@@ -405,103 +354,5 @@ export const restablecerPassword = async (req, res) => {
       mensaje: 'Error al restablecer contraseña',
       error: error.message
     });
-  }
-};
-
-// ============================================
-// PROMOVER A ADMINISTRATIVO (Solo Admin)
-// ============================================
-export const promoverAAdministrativo = async (req, res, next) => {
-  try {
-    const { usuarioId } = req.params;
-    
-    // Verificar que quien hace la petición es admin
-    if (req.usuario.rol !== 'admin') {
-      throw new AppError('Solo los administradores pueden promover usuarios', 403);
-    }
-
-    const usuario = await Usuario.findById(usuarioId);
-    if (!usuario) {
-      throw new AppError('Usuario no encontrado', 404);
-    }
-
-    // No permitir promover a otro admin
-    if (usuario.rol === 'admin') {
-      throw new AppError('No se puede modificar el rol de otro administrador', 400);
-    }
-
-    // Promover a administrativo
-    usuario.rol = 'administrativo';
-    await usuario.save();
-
-    console.log(`✅ Usuario ${usuario.correo} promovido a administrativo por ${req.usuario.correo}`);
-
-    res.json({ 
-      status: 'success',
-      mensaje: 'Usuario promovido exitosamente a Administrativo',
-      usuario: {
-        id: usuario._id,
-        nombre: usuario.nombre,
-        correo: usuario.correo,
-        rol: usuario.rol
-      }
-    });
-
-  } catch (error) {
-    next(error);
-  }
-};
-
-// ============================================
-// DEGRADAR/CAMBIAR ROL (Solo Admin)
-// ============================================
-export const cambiarRolUsuario = async (req, res, next) => {
-  try {
-    const { usuarioId } = req.params;
-    const { nuevoRol } = req.body;
-    
-    // Verificar que quien hace la petición es admin
-    if (req.usuario.rol !== 'admin') {
-      throw new AppError('Solo los administradores pueden cambiar roles', 403);
-    }
-
-    // Verificar que el nuevo rol sea válido (solo roles públicos)
-    if (!ROLES_PUBLICOS.includes(nuevoRol)) {
-      throw new AppError(
-        `Rol no válido. Los roles permitidos son: ${ROLES_PUBLICOS.join(', ')}`,
-        400
-      );
-    }
-
-    const usuario = await Usuario.findById(usuarioId);
-    if (!usuario) {
-      throw new AppError('Usuario no encontrado', 404);
-    }
-
-    // No permitir degradar a un admin
-    if (usuario.rol === 'admin') {
-      throw new AppError('No se puede modificar el rol de un administrador', 400);
-    }
-
-    // Cambiar rol
-    const rolAnterior = usuario.rol;
-    usuario.rol = nuevoRol;
-    await usuario.save();
-
-    console.log(`✅ Rol de ${usuario.correo} cambiado de ${rolAnterior} a ${nuevoRol} por ${req.usuario.correo}`);
-
-    res.json({ 
-      status: 'success',
-      mensaje: `Rol de usuario actualizado exitosamente a ${nuevoRol}`,
-      usuario: {
-        id: usuario._id,
-        nombre: usuario.nombre,
-        correo: usuario.correo,
-        rol: usuario.rol
-      }
-    });
-
-  } catch (error) {
-    next(error);
   }
 };

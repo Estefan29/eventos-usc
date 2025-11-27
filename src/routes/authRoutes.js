@@ -4,7 +4,7 @@ import {
   loginUsuario,
   obtenerPerfil,
   actualizarPerfil,
-  cambiarContraseña,
+  cambiarPassword,
   recuperarPassword,     
   restablecerPassword,
   //promoverAAdministrativo,
@@ -17,13 +17,13 @@ const router = express.Router();
 // Rutas públicas
 router.post('/registro', registrarUsuario);
 router.post('/login', loginUsuario);
-router.post('/recuperar-password', recuperarPassword);           // ← NUEVO
-router.post('/restablecer-password', restablecerPassword);      // ← NUEVO
+router.post('/recuperar-password', recuperarPassword);         
+router.post('/restablecer-password', restablecerPassword); 
 
 // Rutas protegidas
 router.get('/perfil', verificarToken, obtenerPerfil);
 router.put('/perfil', verificarToken, actualizarPerfil);
-router.put('/cambiar-password', verificarToken, cambiarContraseña);
+router.put('/cambiar-password', verificarToken, cambiarPassword);
 
 //router.put('/usuarios/:usuarioId/promover', protegerRuta, promoverAAdministrativo);
 //router.put('/usuarios/:usuarioId/cambiar-rol', protegerRuta, cambiarRolUsuario);
