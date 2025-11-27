@@ -64,10 +64,11 @@ export const loginUsuario = async (req, res, next) => {
       throw new AppError('Correo y contraseña son obligatorios', 400);
     }
 
-    // 👇 ESTE ES EL CAMBIO IMPORTANTE
     const usuario = await Usuario.findOne({ correo }).select('+password');
 
-    console.log("📝 Usuario encontrado:", usuario);
+    console.log("🟦 Usuario encontrado:", usuario);
+    console.log("🟩 usuario.password existe?:", usuario?.password);
+    console.log("🟧 Keys del usuario:", Object.keys(usuario.toObject()));
 
     if (!usuario) {
       throw new AppError('Credenciales inválidas', 401);
@@ -103,6 +104,7 @@ export const loginUsuario = async (req, res, next) => {
     next(error);
   }
 };
+
 export const obtenerPerfil = async (req, res) => {
   res.json({
     status: 'success',
@@ -137,12 +139,11 @@ export const actualizarPerfil = async (req, res, next) => {
   }
 };
 
-export async function cambiarPassword(req, res) {
+export const cambiarPassword = async (req, res) => {
   try {
     const { passwordActual, passwordNuevo } = req.body;
     const usuarioId = req.usuario.id;
 
-    // Validaciones
     if (!passwordActual || !passwordNuevo) {
       return res.status(400).json({
         mensaje: 'Debes proporcionar la contraseña actual y la nueva'
@@ -155,15 +156,13 @@ export async function cambiarPassword(req, res) {
       });
     }
 
-    // Buscar usuario con password incluido
     const usuario = await Usuario.findById(usuarioId).select('+password');
 
     if (!usuario) {
       return res.status(404).json({ mensaje: 'Usuario no encontrado' });
     }
 
-    // Verificar contraseña actual
-    const passwordValido = await bcryptjs.compare(passwordActual, usuario.password);
+    const passwordValido = await bcrypt.compare(passwordActual, usuario.password);
 
     if (!passwordValido) {
       return res.status(401).json({
@@ -171,17 +170,15 @@ export async function cambiarPassword(req, res) {
       });
     }
 
-    // Verificar que la nueva contraseña sea diferente
-    const esMismaPassword = await bcryptjs.compare(passwordNuevo, usuario.password);
+    const esMismaPassword = await bcrypt.compare(passwordNuevo, usuario.password);
     if (esMismaPassword) {
       return res.status(400).json({
         mensaje: 'La nueva contraseña debe ser diferente a la actual'
       });
     }
 
-    // Encriptar nueva contraseña
-    const salt = await bcryptjs.genSalt(10);
-    usuario.password = await bcryptjs.hash(passwordNuevo, salt);
+    const salt = await bcrypt.genSalt(10);
+    usuario.password = await bcrypt.hash(passwordNuevo, salt);
 
     await usuario.save();
 
@@ -196,37 +193,68 @@ export async function cambiarPassword(req, res) {
       error: error.message
     });
   }
-}
+};
+
 export const recuperarPassword = async (req, res) => {
   try {
+    console.log('🟢 Iniciando recuperarPassword...');
+    console.log('📦 req.body:', req.body);
+    
     const { correo } = req.body;
+    
+    console.log('📧 EMAIL_USER:', process.env.EMAIL_USER);
+    console.log('🔑 EMAIL_PASSWORD exists:', !!process.env.EMAIL_PASSWORD);
+    console.log('🌐 FRONTEND_URL:', process.env.FRONTEND_URL);
+    console.log('📨 Correo recibido:', correo);
 
-    const usuario = await Usuario.findOne({ correo });
+    if (!correo) {
+      console.log('❌ No se proporcionó correo');
+      return res.status(400).json({
+        mensaje: 'Por favor proporciona un correo electrónico'
+      });
+    }
+
+    console.log('🔍 Buscando usuario con correo:', correo.toLowerCase());
+    const usuario = await Usuario.findOne({ correo: correo.toLowerCase() });
     
     if (!usuario) {
+      console.log('⚠️ Usuario no encontrado, pero devolviendo mensaje genérico');
       return res.status(200).json({
         mensaje: 'Si el correo existe, recibirás un enlace de recuperación'
       });
     }
 
+    console.log('✅ Usuario encontrado:', usuario.nombre);
+
+    // Generar token con crypto
     const tokenRecuperacion = crypto.randomBytes(32).toString('hex');
-    const expiracion = Date.now() + 3600000;
+    const expiracion = Date.now() + 3600000; // 1 hora
+
+    console.log('🔐 Token generado:', tokenRecuperacion.substring(0, 10) + '...');
 
     usuario.tokenRecuperacion = tokenRecuperacion;
     usuario.tokenRecuperacionExpira = expiracion;
     await usuario.save();
 
-    const urlFrontend = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const enlaceRecuperacion = `${urlFrontend}/restablecer-password/${tokenRecuperacion}`;
+    console.log('💾 Token guardado en base de datos');
+   
+    const enlaceRecuperacion = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password/${tokenRecuperacion}`;
+    
+    console.log('🔗 Enlace de recuperación generado:', enlaceRecuperacion);
 
+    console.log('📮 Configurando transportador de correo...');
     const transporter = nodemailer.createTransport({
-      service: 'gmail',
+      host: 'smtp.gmail.com',
+      port: 587,
+      secure: false,
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASSWORD
       }
     });
 
+    console.log('📤 Enviando correo...');
+    
     await transporter.sendMail({
       from: `"Eventos USC" <${process.env.EMAIL_USER}>`,
       to: correo,
@@ -306,11 +334,58 @@ export const recuperarPassword = async (req, res) => {
   }
 };
 
+// ✅ CORREGIDO: Validar token (GET)
+export const validarTokenRecuperacion = async (req, res) => {
+  try {
+    const { token } = req.params;
+    console.log('🔍 Validando token:', token);
+
+    if (!token) {
+      return res.status(400).json({
+        mensaje: 'Token no proporcionado',
+        valido: false
+      });
+    }
+
+    const usuario = await Usuario.findOne({
+      tokenRecuperacion: token,
+      tokenRecuperacionExpira: { $gt: Date.now() }
+    });
+
+    if (!usuario) {
+      console.log('❌ Token inválido o expirado');
+      return res.status(400).json({
+        mensaje: 'El enlace ha expirado o no es válido',
+        valido: false
+      });
+    }
+
+    console.log('✅ Token válido para usuario:', usuario.correo);
+    res.status(200).json({
+      mensaje: 'Token válido',
+      valido: true
+    });
+
+  } catch (error) {
+    console.error('❌ Error al validar token:', error);
+    res.status(500).json({
+      mensaje: 'Error al validar token',
+      valido: false
+    });
+  }
+};
+
+// ✅ CORREGIDO: Restablecer password (POST)
 export const restablecerPassword = async (req, res) => {
   try {
-    const { token, nuevoPassword } = req.body;
+    const { token } = req.params; // ✅ Ahora tomamos token de params
+    const { password } = req.body; // ✅ Cambiado de nuevoPassword a password
+    
+    console.log('🔄 Restableciendo password...');
+    console.log('Token:', token);
+    console.log('Password recibido:', password ? '***' : undefined);
 
-    if (!token || !nuevoPassword) {
+    if (!token || !password) {
       return res.status(400).json({
         mensaje: 'Token y nueva contraseña son requeridos'
       });
@@ -322,20 +397,23 @@ export const restablecerPassword = async (req, res) => {
     });
 
     if (!usuario) {
+      console.log('❌ Token inválido o expirado');
       return res.status(400).json({
-        mensaje: 'Token inválido o expirado. Solicita un nuevo enlace de recuperación.'
+        mensaje: 'El enlace ha expirado o no es válido. Solicita un nuevo enlace de recuperación.'
       });
     }
 
-    if (nuevoPassword.length < 6) {
+    if (password.length < 6) {
       return res.status(400).json({
         mensaje: 'La contraseña debe tener al menos 6 caracteres'
       });
     }
 
+    // Hashear nueva contraseña
     const salt = await bcrypt.genSalt(10);
-    usuario.password = await bcrypt.hash(nuevoPassword, salt);
+    usuario.password = await bcrypt.hash(password, salt);
 
+    // Limpiar tokens
     usuario.tokenRecuperacion = undefined;
     usuario.tokenRecuperacionExpira = undefined;
 
